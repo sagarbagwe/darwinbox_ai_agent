@@ -5,28 +5,25 @@ import json
 # ==== CONFIG ====
 DOMAIN = "https://gommt.stage.darwinbox.io"
 USERNAME = "Salesforce"
-PASSWORD = "J&$a764%#$76"      # Using the password you just provided for Basic Auth
+PASSWORD = "J&$a764%#$76"      # Basic Auth password
 
 # --- Keys for the JSON Payload (from Ram's email) ---
-LEAVE_API_KEY = "049f914e0cfe2518989efc0ebfc2d8b39572cedb0825dc274755d3fc93cc360425213dea9d1c3f76eaffe52b9a9fd5448c851d0c2c9d3765eb51d9847db4a627"
+EMP_API_KEY = "429bdea4387c3cc0b5ecbc81eb8398ad0882a6ab0db078b226ee5481bc84cc78b6bedcdcc49c7a800bff1cce078183516a67ff8b61360078dc14d94bb29cc508"
+EMP_DATASET_KEY = "f29b5257bb9c19b1794546952dc83c4577c02f9fb74e4a5c64ea21198afede83800cdea87553dce3a2bbb9bb5991d213d9169872c89601f077694e927e45c6ae"
 
-# === Parameters for the Leave Report ===
-TEST_EMPLOYEE_ID = "MMT6765" # Using the same test employee
+# === Parameters for the API Call ===
+TEST_EMPLOYEE_ID = "MMT6765" 
 
-# ==== CORRECTED API CALL ====
+# ==== API CALL ====
 
-# 1. Using the FULL URL path you provided
-url = f"{DOMAIN}/leavesactionapi/leaveActionTakenLeaves"
+# 1. Using the URL path you provided
+url = f"{DOMAIN}/masterapi/employee"
 
-# 2. UPDATED PAYLOAD: Using the exact structure and keys you just provided.
-# This uses the 'dd-MM-yyyy' date format and includes the 'action' fields.
+# 2. Building the payload with the two required keys
 payload = {
-    "api_key": LEAVE_API_KEY,
-    "from": "23-09-2025",
-    "to": "23-09-2025",
-    "action": "2",
-    "action_from": "01-09-2025",
-    "employee_no": [TEST_EMPLOYEE_ID]
+    "api_key": EMP_API_KEY,
+    "datasetKey": EMP_DATASET_KEY, # Using datasetKey (camelCase) as in our agent
+    "employee_ids": [TEST_EMPLOYEE_ID]
 }
 
 headers = {"Content-Type": "application/json"}
@@ -49,7 +46,7 @@ try:
     print("====================================")
     print("Raw Response Text:\n", resp.text)
     
-    # Try to print the JSON response, but handle errors if it's not valid JSON
+    # Try to print the JSON response
     try:
         print("\nAs JSON:\n", resp.json())
     except requests.exceptions.JSONDecodeError:
@@ -58,4 +55,3 @@ try:
 except Exception as e:
     print("\n--- ERROR DURING REQUEST ---")
     print(e)
-

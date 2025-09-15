@@ -16,7 +16,14 @@ logger = logging.getLogger(__name__)
 DOMAIN = "https://gommt.stage.darwinbox.io"
 USERNAME = "Salesforce"
 PASSWORD = "J&$a764%#$76"
+
+# --- API Keys for Tools ---
+# Key for the Leave Report API
 LEAVE_API_KEY = "049f914e0cfe2518989efc0ebfc2d8b39572cedb0825dc274755d3fc93cc360425213dea9d1c3f76eaffe52b9a9fd5448c851d0c2c9d3765eb51d9847db4a627"
+
+# Keys for the Master Employee API
+EMP_API_KEY = "429bdea4387c3cc0b5ecbc81eb8398ad0882a6ab0db078b226ee5481bc84cc78b6bedcdcc49c7a800bff1cce078183516a67ff8b61360078dc14d94bb29cc508"
+EMP_DATASET_KEY = "f29b5257bb9c19b1794546952dc83c4577c02f9fb74e4a5c64ea21198afede83800cdea87553dce3a2bbb9bb5991d213d9169872c89601f077694e927e45c6ae"
 
 # --- Gemini API Configuration ---
 def setup_gemini_api():
@@ -54,6 +61,12 @@ def validate_employee_id(employee_id: str) -> bool:
         return False
     return True
 
+def validate_employee_ids(employee_ids: list) -> bool:
+    """Validate list of employee IDs"""
+    if not employee_ids or not isinstance(employee_ids, list):
+        return False
+    return all(validate_employee_id(emp_id) for emp_id in employee_ids)
+
 def convert_date_format(date_string: str, from_format: str = '%Y-%m-%d', to_format: str = '%d-%m-%Y') -> str:
     """Convert date from one format to another"""
     try:
@@ -63,11 +76,11 @@ def convert_date_format(date_string: str, from_format: str = '%Y-%m-%d', to_form
         logger.error(f"Date conversion failed: {e}")
         raise ValueError(f"Invalid date format: {date_string}")
 
-# ==== 3. PYTHON FUNCTION (THE "TOOL") ====
+# ==== 3. PYTHON FUNCTIONS (THE "TOOLS") ====
 
 def get_leave_report(employee_id: str, start_date: str, end_date: str) -> str:
     """
-    Fetches the "action taken" leave report for a specific employee and date range.
+    Tool 1: Fetches the "action taken" leave report for a specific employee and date range.
     
     Args:
         employee_id: The employee number (e.g., "MMT6765")
@@ -199,6 +212,123 @@ def get_leave_report(employee_id: str, start_date: str, end_date: str) -> str:
         logger.error(f"Unexpected error: {e}")
         return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
 
+def get_employee_info(employee_ids: list) -> str:
+    """
+    Tool 2: Fetches core master profile data for one or more employees.
+    
+    Args:
+        employee_ids: A list of one or more employee numbers (e.g., ["MMT6765"])
+        
+    Returns:
+        JSON string containing the employee data or error message
+    """
+    logger.info(f"get_employee_info called with params: employee_ids={employee_ids}")
+    
+    try:
+        # Input validation
+        if not validate_employee_ids(employee_ids):
+            return json.dumps({"error": "Invalid employee IDs format. Must be a non-empty list of valid employee IDs."})
+        
+        # Clean employee IDs (remove whitespace)
+        clean_employee_ids = [emp_id.strip() for emp_id in employee_ids]
+        
+        # API call setup - FIXED: Use the exact URL from your working test
+        url = f"{DOMAIN}/masterapi/employee"
+        
+        # FIXED: Match the exact payload structure from your working test
+        payload = {
+            "api_key": EMP_API_KEY,
+            "datasetKey": EMP_DATASET_KEY,  # Keep camelCase as in working test
+            "employee_ids": clean_employee_ids
+        }
+        
+        # FIXED: Simplified headers to match working test
+        headers = {"Content-Type": "application/json"}
+        
+        logger.info(f"Making API request to: {url}")
+        logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+        
+        # FIXED: Match the exact request structure from your working test
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            auth=HTTPBasicAuth(USERNAME, PASSWORD),  # This matches your working test
+            timeout=15  # Reduced timeout to match working test
+        )
+        
+        logger.info(f"API Response Status: {response.status_code}")
+        logger.info(f"Raw response text: {response.text[:500]}")  # Log first 500 chars
+        
+        # Handle different response codes
+        if response.status_code == 200:
+            try:
+                api_data = response.json()
+                logger.info("Successfully retrieved employee info data")
+                
+                # Add some metadata to the response
+                result = {
+                    "status": "success",
+                    "requested_employee_ids": employee_ids,
+                    "data": api_data,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                return json.dumps(result, indent=2)
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                return json.dumps({
+                    "error": "Invalid JSON response from API",
+                    "raw_response": response.text[:500],
+                    "status_code": response.status_code
+                })
+                
+        elif response.status_code == 401:
+            logger.error("Authentication failed")
+            return json.dumps({
+                "error": "Authentication failed. Please check credentials.",
+                "raw_response": response.text[:200]
+            })
+            
+        elif response.status_code == 404:
+            logger.error("API endpoint not found")
+            return json.dumps({
+                "error": "API endpoint not found. Please check the URL.",
+                "raw_response": response.text[:200]
+            })
+            
+        elif response.status_code >= 500:
+            logger.error(f"Server error: {response.status_code}")
+            return json.dumps({
+                "error": f"Server error: {response.status_code}. Please try again later.",
+                "raw_response": response.text[:200]
+            })
+            
+        else:
+            logger.error(f"Unexpected status code: {response.status_code}")
+            return json.dumps({
+                "error": f"Unexpected response: {response.status_code}",
+                "raw_response": response.text[:500],
+                "status_code": response.status_code
+            })
+
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out")
+        return json.dumps({"error": "Request timed out. Please try again."})
+        
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error")
+        return json.dumps({"error": "Unable to connect to Darwinbox API. Please check your internet connection."})
+        
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error: {http_err}")
+        return json.dumps({"error": f"HTTP error: {http_err}"})
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in get_employee_info: {e}")
+        return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
+
 # ==== 4. GEMINI MODEL CONFIGURATION ====
 
 def setup_gemini_model():
@@ -229,6 +359,21 @@ def setup_gemini_model():
                         },
                         "required": ["employee_id", "start_date", "end_date"]
                     }
+                },
+                {
+                    "name": "get_employee_info",
+                    "description": "Gets core master profile data for one or more employees, such as their manager, email, team, designation, or other profile details. Use this for 'who-is-who' questions.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "employee_ids": {
+                                "type": "ARRAY",
+                                "description": "A list of one or more employee numbers, e.g., ['MMT6765', 'EMP001']",
+                                "items": {"type": "STRING"}
+                            }
+                        },
+                        "required": ["employee_ids"]
+                    }
                 }
             ]
         }
@@ -239,27 +384,39 @@ def setup_gemini_model():
     system_prompt = f"""
 You are an AI HR assistant for Darwinbox HRMS system. Today's date is {today_str}.
 
-Your primary function is to help users retrieve and understand employee leave reports using the get_leave_report tool.
+You have two main tools available:
+1. get_leave_report: Use this for questions about employee leaves, absences, or time-off history
+2. get_employee_info: Use this for questions about employee profiles, managers, emails, designations, teams, or other master data
 
 Key guidelines:
-1. When users ask about leaves, absences, or time-off, extract the employee ID and date range
-2. If dates are not specific, help interpret relative terms:
+1. When users ask about leaves/absences, extract employee ID and date range, then use get_leave_report
+2. When users ask about employee details (who is X's manager, what's X's email, etc.), use get_employee_info
+3. For date interpretation:
    - "last month" = previous calendar month
    - "this month" = current calendar month  
    - "last week" = previous 7 days
    - "this year" = current calendar year
-3. Always validate that you have employee_id, start_date, and end_date before calling the tool
-4. If information is missing, ask clarifying questions
-5. When presenting results, summarize the data in a user-friendly format
-6. Handle errors gracefully and explain what went wrong
-7. Be helpful and conversational while remaining professional
+4. Always validate that you have required parameters before calling tools
+5. If information is missing, ask clarifying questions
+6. When presenting results, summarize the data in a user-friendly format
+7. Handle errors gracefully and explain what went wrong
+8. Be helpful and conversational while remaining professional
+9. For employee_info, you can query multiple employees at once if needed
 
-Remember: All dates must be in YYYY-MM-DD format for the API call.
+Important: When you receive function responses, carefully parse the JSON data. The get_employee_info function returns:
+- status: "success" if API call worked
+- data: Contains the actual API response with employee information
+- Look for "employee_data" array in the API response which contains employee details like:
+  - full_name, company_email_id, direct_manager_name, band, designation, etc.
+
+Always extract and present the specific information the user requested from the function response data.
+
+Remember: All dates must be in YYYY-MM-DD format for the leave API call.
 """
 
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",  # Updated to more stable model
+            model_name="gemini-2.5-flash",  # Updated to newer model
             system_instruction=system_prompt,
             tools=tools,
             generation_config=genai.types.GenerationConfig(
@@ -314,7 +471,7 @@ def handle_function_call(chat, fn_call, available_tools):
 def main():
     """Main application entry point"""
     print("="*60)
-    print("🤖 DARWINBOX HR LEAVE REPORT AGENT")
+    print("🤖 DARWINBOX HR AGENT (Fixed Employee API)")
     print("="*60)
     
     # Setup Gemini API
@@ -329,7 +486,8 @@ def main():
     
     # Tool mapping
     available_tools = {
-        "get_leave_report": get_leave_report
+        "get_leave_report": get_leave_report,
+        "get_employee_info": get_employee_info
     }
     
     # Start chat session
@@ -338,12 +496,27 @@ def main():
         logger.info("Chat session started successfully")
         
         print(f"📅 Today is {datetime.now().strftime('%Y-%m-%d')}")
-        print("💡 Ask me about employee leave reports!")
+        print("💡 Ask me about employee leave reports or employee information!")
         print("\nExample queries:")
+        print("📋 Leave Reports:")
         print("• 'Show me leaves for employee MMT6765 in January 2024'")
         print("• 'How many leaves did EMP001 take last month?'")
         print("• 'Get leave report for MMT6765 from 2024-01-01 to 2024-03-31'")
+        print("\n👥 Employee Information:")
+        print("• 'Who is the manager for MMT6765?'")
+        print("• 'What is the email address of employee EMP001?'")
+        print("• 'Show me profile details for MMT6765'")
+        print("• 'What is MMT6765's designation and team?'")
         print("\n" + "="*60)
+        
+        # Test the employee API directly first
+        print("\n🔧 Testing employee API connection...")
+        test_result = get_employee_info(["MMT6765"])
+        test_data = json.loads(test_result)
+        if "error" in test_data:
+            print(f"⚠️ Warning: Employee API test failed: {test_data['error']}")
+        else:
+            print("✅ Employee API test successful!")
         
         # Conversation loop
         while True:
@@ -355,7 +528,7 @@ def main():
                     break
                 
                 if not user_input:
-                    print("🤖 Agent: Please ask me something about employee leave reports.")
+                    print("🤖 Agent: Please ask me something about employee leave reports or employee information.")
                     continue
                 
                 # Send message to model
