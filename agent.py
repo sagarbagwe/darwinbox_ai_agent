@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import logging
+import traceback
 
 # Set up logging for better debugging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -57,15 +58,12 @@ def validate_date_format(date_string: str) -> bool:
 
 def validate_employee_id(employee_id: str) -> bool:
     """Basic validation for employee ID"""
-    if not employee_id or len(employee_id.strip()) < 3:
+    if not employee_id or not isinstance(employee_id, str):
+        return False
+    stripped_id = employee_id.strip()
+    if len(stripped_id) < 3:
         return False
     return True
-
-def validate_employee_ids(employee_ids: list) -> bool:
-    """Validate list of employee IDs"""
-    if not employee_ids or not isinstance(employee_ids, list):
-        return False
-    return all(validate_employee_id(emp_id) for emp_id in employee_ids)
 
 def convert_date_format(date_string: str, from_format: str = '%Y-%m-%d', to_format: str = '%d-%m-%Y') -> str:
     """Convert date from one format to another"""
@@ -212,7 +210,7 @@ def get_leave_report(employee_id: str, start_date: str, end_date: str) -> str:
         logger.error(f"Unexpected error: {e}")
         return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
 
-def get_employee_info(employee_ids: list) -> str:
+def get_employee_info(employee_ids) -> str:
     """
     Tool 2: Fetches core master profile data for one or more employees.
     
@@ -223,42 +221,66 @@ def get_employee_info(employee_ids: list) -> str:
         JSON string containing the employee data or error message
     """
     logger.info(f"get_employee_info called with params: employee_ids={employee_ids}")
+    logger.info(f"employee_ids type: {type(employee_ids)}")
     
     try:
-        # Input validation
-        if not validate_employee_ids(employee_ids):
-            return json.dumps({"error": "Invalid employee IDs format. Must be a non-empty list of valid employee IDs."})
+        # FIXED: Handle Gemini's RepeatedComposite type by converting to list
+        if hasattr(employee_ids, '__iter__') and not isinstance(employee_ids, str):
+            # Convert RepeatedComposite or other iterable to list
+            employee_ids = list(employee_ids)
+            logger.info(f"Converted employee_ids to list: {employee_ids}")
         
-        # Clean employee IDs (remove whitespace)
-        clean_employee_ids = [emp_id.strip() for emp_id in employee_ids]
+        # FIXED: Improved input validation with better logging
+        if not employee_ids:
+            logger.error("Empty employee_ids list provided")
+            return json.dumps({"error": "Employee IDs list cannot be empty."})
         
-        # API call setup - FIXED: Use the exact URL from your working test
+        if not isinstance(employee_ids, list):
+            logger.error(f"employee_ids is not a list, got: {type(employee_ids)}")
+            return json.dumps({"error": "Employee IDs must be provided as a list."})
+        
+        # FIXED: More detailed validation with logging
+        valid_ids = []
+        for emp_id in employee_ids:
+            if not emp_id or not isinstance(emp_id, str):
+                logger.error(f"Invalid employee ID (not string or empty): {emp_id}")
+                return json.dumps({"error": f"Invalid employee ID: {emp_id}. Must be a non-empty string."})
+            
+            stripped_id = emp_id.strip()
+            if len(stripped_id) < 3:
+                logger.error(f"Employee ID too short: '{stripped_id}' (length: {len(stripped_id)})")
+                return json.dumps({"error": f"Invalid employee ID: '{stripped_id}'. Must be at least 3 characters long."})
+            
+            valid_ids.append(stripped_id)
+        
+        logger.info(f"Validated employee IDs: {valid_ids}")
+        
+        # API call setup - Using the exact URL from your working test
         url = f"{DOMAIN}/masterapi/employee"
         
-        # FIXED: Match the exact payload structure from your working test
+        # Using the exact payload structure from your working test
         payload = {
             "api_key": EMP_API_KEY,
             "datasetKey": EMP_DATASET_KEY,  # Keep camelCase as in working test
-            "employee_ids": clean_employee_ids
+            "employee_ids": valid_ids
         }
         
-        # FIXED: Simplified headers to match working test
+        # Simplified headers to match working test
         headers = {"Content-Type": "application/json"}
         
         logger.info(f"Making API request to: {url}")
         logger.info(f"Payload: {json.dumps(payload, indent=2)}")
         
-        # FIXED: Match the exact request structure from your working test
+        # Match the exact request structure from your working test
         response = requests.post(
             url,
             json=payload,
             headers=headers,
-            auth=HTTPBasicAuth(USERNAME, PASSWORD),  # This matches your working test
-            timeout=15  # Reduced timeout to match working test
+            auth=HTTPBasicAuth(USERNAME, PASSWORD),
+            timeout=15
         )
         
         logger.info(f"API Response Status: {response.status_code}")
-        logger.info(f"Raw response text: {response.text[:500]}")  # Log first 500 chars
         
         # Handle different response codes
         if response.status_code == 200:
@@ -327,6 +349,7 @@ def get_employee_info(employee_ids: list) -> str:
         
     except Exception as e:
         logger.error(f"Unexpected error in get_employee_info: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
 
 # ==== 4. GEMINI MODEL CONFIGURATION ====
@@ -436,34 +459,51 @@ Remember: All dates must be in YYYY-MM-DD format for the leave API call.
 # ==== 5. CONVERSATION HANDLER ====
 
 def handle_function_call(chat, fn_call, available_tools):
-    """Handle function calls with proper error handling"""
+    """Handle function calls with proper error handling and Gemini type conversion"""
     try:
         fn_name = fn_call.name
-        args = dict(fn_call.args)
+        
+        # FIXED: Properly convert Gemini's argument types to Python types
+        args = {}
+        for key, value in fn_call.args.items():
+            # Handle RepeatedComposite (list-like) objects from Gemini
+            if hasattr(value, '__iter__') and not isinstance(value, str):
+                args[key] = list(value)  # Convert to regular Python list
+            else:
+                args[key] = value
         
         logger.info(f"Function call: {fn_name} with args: {args}")
+        logger.info(f"Original args types: {[(k, type(v).__name__) for k, v in fn_call.args.items()]}")
+        logger.info(f"Converted args types: {[(k, type(v).__name__) for k, v in args.items()]}")
         
         if fn_name in available_tools:
             # Call the actual Python function
             function_to_call = available_tools[fn_name]
             function_response_data = function_to_call(**args)
             
-            # Send function response back to model
-            response = chat.send_message([
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=fn_name,
-                        response={"content": function_response_data}
-                    )
-                )
-            ])
+            logger.info(f"Function {fn_name} returned: {function_response_data[:200]}...")  # Log first 200 chars
             
+            # Send function response back to model
+            function_response = genai.protos.Part(
+                function_response=genai.protos.FunctionResponse(
+                    name=fn_name,
+                    response={"content": function_response_data}
+                )
+            )
+            
+            response = chat.send_message([function_response])
+            
+            logger.info(f"Model response after function call: {response.text[:200]}...")
             return response.text
         else:
             return f"Error: Unknown function '{fn_name}' requested."
             
     except Exception as e:
         logger.error(f"Error handling function call: {e}")
+        logger.error(f"Function name: {fn_name}")
+        logger.error(f"Raw function call args: {dict(fn_call.args) if hasattr(fn_call, 'args') else 'No args'}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return f"Error executing function: {str(e)}"
 
 # ==== 6. MAIN APPLICATION ====
@@ -557,10 +597,12 @@ def main():
                 
             except Exception as e:
                 logger.error(f"Error in conversation loop: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 print(f"🤖 Agent: I encountered an error: {str(e)}. Please try again.")
     
     except Exception as e:
         logger.error(f"Failed to start chat session: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         print(f"Failed to initialize chat: {e}")
 
 if __name__ == "__main__":
