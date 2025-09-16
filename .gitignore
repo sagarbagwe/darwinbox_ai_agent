@@ -6,6 +6,7 @@ __pycache__/
 # Virtual environments
 venv/
 .env/
+.env
 .env.*     # any environment files
 
 # Pip / Poetry / build artifacts

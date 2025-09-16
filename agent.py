@@ -355,6 +355,122 @@ def get_employee_info(employee_ids) -> str:
         logger.error(f"Traceback: {traceback.format_exc()}")
         return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
 
+def get_all_employees() -> str:
+    """
+    Tool 4: Fetches all employee master data from the organization.
+    
+    Returns:
+        JSON string containing all employee data or error message
+    """
+    logger.info("get_all_employees called - fetching all employee data")
+    
+    try:
+        # API call setup - Same endpoint but without employee_ids filter
+        url = f"{DOMAIN}/masterapi/employee"
+        
+        # Payload without employee_ids to get all employees
+        payload = {
+            "api_key": EMP_API_KEY,
+            "datasetKey": EMP_DATASET_KEY
+            # No employee_ids parameter = fetch all employees
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        
+        logger.info(f"Making API request to: {url}")
+        logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+        
+        # Make the request with increased timeout since all employees might be a large dataset
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            auth=HTTPBasicAuth(USERNAME, PASSWORD),
+            timeout=60  # Increased timeout for potentially large response
+        )
+        
+        logger.info(f"API Response Status: {response.status_code}")
+        
+        # Handle different response codes
+        if response.status_code == 200:
+            try:
+                api_data = response.json()
+                logger.info("Successfully retrieved all employee data")
+                
+                # Count employees for summary
+                employee_count = 0
+                if isinstance(api_data, dict) and "data" in api_data:
+                    if isinstance(api_data["data"], list):
+                        employee_count = len(api_data["data"])
+                elif isinstance(api_data, list):
+                    employee_count = len(api_data)
+                
+                # Add some metadata to the response
+                result = {
+                    "status": "success",
+                    "request_type": "all_employees",
+                    "employee_count": employee_count,
+                    "data": api_data,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                logger.info(f"Retrieved data for {employee_count} employees")
+                return json.dumps(result, indent=2)
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                return json.dumps({
+                    "error": "Invalid JSON response from API",
+                    "raw_response": response.text[:500],
+                    "status_code": response.status_code
+                })
+                
+        elif response.status_code == 401:
+            logger.error("Authentication failed")
+            return json.dumps({
+                "error": "Authentication failed. Please check credentials.",
+                "raw_response": response.text[:200]
+            })
+            
+        elif response.status_code == 404:
+            logger.error("API endpoint not found")
+            return json.dumps({
+                "error": "API endpoint not found. Please check the URL.",
+                "raw_response": response.text[:200]
+            })
+            
+        elif response.status_code >= 500:
+            logger.error(f"Server error: {response.status_code}")
+            return json.dumps({
+                "error": f"Server error: {response.status_code}. Please try again later.",
+                "raw_response": response.text[:200]
+            })
+            
+        else:
+            logger.error(f"Unexpected status code: {response.status_code}")
+            return json.dumps({
+                "error": f"Unexpected response: {response.status_code}",
+                "raw_response": response.text[:500],
+                "status_code": response.status_code
+            })
+
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out")
+        return json.dumps({"error": "Request timed out. The all-employees request might take longer due to large dataset size. Please try again."})
+        
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error")
+        return json.dumps({"error": "Unable to connect to Darwinbox API. Please check your internet connection."})
+        
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error: {http_err}")
+        return json.dumps({"error": f"HTTP error: {http_err}"})
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in get_all_employees: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
+
 def get_attendance_report(employee_ids, from_date: str, to_date: str) -> str:
     """
     Tool 3: Fetches daily attendance roster data for one or more employees within a date range.
@@ -528,7 +644,7 @@ def get_attendance_report(employee_ids, from_date: str, to_date: str) -> str:
 def setup_gemini_model():
     """Setup Gemini model with tools and proper configuration"""
     
-    # Tool definition for Gemini - Updated to include attendance report
+    # Tool definition for Gemini - Updated to include get_all_employees
     tools = [
         {
             "function_declarations": [
@@ -556,7 +672,7 @@ def setup_gemini_model():
                 },
                 {
                     "name": "get_employee_info",
-                    "description": "Gets core master profile data for one or more employees, such as their manager, email, team, designation, or other profile details. Use this for 'who-is-who' questions.",
+                    "description": "Gets core master profile data for one or more specific employees, such as their manager, email, team, designation, or other profile details. Use this for 'who-is-who' questions about specific employees.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
@@ -567,6 +683,14 @@ def setup_gemini_model():
                             }
                         },
                         "required": ["employee_ids"]
+                    }
+                },
+                {
+                    "name": "get_all_employees",
+                    "description": "Retrieves master data for ALL employees in the organization. Use this when users want to see all employees, get employee lists, count total employees, or search across the entire employee database.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {}
                     }
                 },
                 {
@@ -596,36 +720,44 @@ def setup_gemini_model():
         }
     ]
     
-    # Enhanced system prompt with better context - Updated to include attendance
+    # Enhanced system prompt with better context - Updated to include get_all_employees
     today_str = datetime.now().strftime('%Y-%m-%d')
     system_prompt = f"""
 You are an AI HR assistant for Darwinbox HRMS system. Today's date is {today_str}.
 
-You have three main tools available:
+You have four main tools available:
 1. get_leave_report: Use this for questions about employee leaves, absences, or time-off history
-2. get_employee_info: Use this for questions about employee profiles, managers, emails, designations, teams, or other master data
-3. get_attendance_report: Use this for questions about employee attendance, check-in/check-out times, work hours, presence data, or daily attendance roster
+2. get_employee_info: Use this for questions about specific employee profiles, managers, emails, designations, teams, or other master data
+3. get_all_employees: Use this when users want to see ALL employees, get complete employee lists, count total employees, or search across the entire employee database
+4. get_attendance_report: Use this for questions about employee attendance, check-in/check-out times, work hours, presence data, or daily attendance roster
 
 Key guidelines:
 1. When users ask about leaves/absences, extract employee ID and date range, then use get_leave_report
-2. When users ask about employee details (who is X's manager, what's X's email, etc.), use get_employee_info
-3. When users ask about attendance, check-in times, work hours, presence, etc., use get_attendance_report
-4. For date interpretation:
+2. When users ask about specific employee details (who is X's manager, what's X's email, etc.), use get_employee_info
+3. When users ask for ALL employees, employee lists, total employee count, or want to search all employees, use get_all_employees
+4. When users ask about attendance, check-in times, work hours, presence, etc., use get_attendance_report
+5. For date interpretation:
    - "last month" = previous calendar month
    - "this month" = current calendar month  
    - "last week" = previous 7 days
    - "this year" = current calendar year
-5. Always validate that you have required parameters before calling tools
-6. If information is missing, ask clarifying questions
-7. When presenting results, summarize the data in a user-friendly format
-8. Handle errors gracefully and explain what went wrong
-9. Be helpful and conversational while remaining professional
-10. For employee_info and attendance_report, you can query multiple employees at once if needed
+6. Always validate that you have required parameters before calling tools
+7. If information is missing, ask clarifying questions
+8. When presenting results, summarize the data in a user-friendly format
+9. Handle errors gracefully and explain what went wrong
+10. Be helpful and conversational while remaining professional
+11. For get_employee_info and get_attendance_report, you can query multiple employees at once if needed
+12. Use get_all_employees for queries like: "show me all employees", "how many employees do we have", "list all staff", "who works here", etc.
 
 Important: When you receive function responses, carefully parse the JSON data. Each function returns:
 - status: "success" if API call worked
 - data: Contains the actual API response with relevant information
 - Look for specific data fields in each API response and extract the information the user requested
+
+For get_all_employees, look for:
+- Total employee count
+- Employee names, IDs, departments, designations
+- Organizational structure data
 
 For attendance reports, look for fields like:
 - Check-in/check-out times
@@ -678,7 +810,12 @@ def handle_function_call(chat, fn_call, available_tools):
         if fn_name in available_tools:
             # Call the actual Python function
             function_to_call = available_tools[fn_name]
-            function_response_data = function_to_call(**args)
+            
+            # Handle functions with no arguments (like get_all_employees)
+            if not args:
+                function_response_data = function_to_call()
+            else:
+                function_response_data = function_to_call(**args)
             
             logger.info(f"Function {fn_name} returned: {function_response_data[:200]}...")  # Log first 200 chars
             
@@ -710,7 +847,7 @@ def handle_function_call(chat, fn_call, available_tools):
 def main():
     """Main application entry point"""
     print("="*60)
-    print("🤖 DARWINBOX HR AGENT (With Attendance Report)")
+    print("🤖 DARWINBOX HR AGENT (With All Employees API)")
     print("="*60)
     
     # Setup Gemini API
@@ -723,10 +860,11 @@ def main():
         print("Failed to initialize Gemini model. Exiting.")
         return
     
-    # Tool mapping - Updated to include attendance report
+    # Tool mapping - Updated to include get_all_employees
     available_tools = {
         "get_leave_report": get_leave_report,
         "get_employee_info": get_employee_info,
+        "get_all_employees": get_all_employees,
         "get_attendance_report": get_attendance_report
     }
     
@@ -736,17 +874,23 @@ def main():
         logger.info("Chat session started successfully")
         
         print(f"📅 Today is {datetime.now().strftime('%Y-%m-%d')}")
-        print("💡 Ask me about employee leave reports, employee information, or attendance data!")
+        print("💡 Ask me about employee leave reports, employee information, all employees data, or attendance data!")
         print("\nExample queries:")
         print("📋 Leave Reports:")
         print("• 'Show me leaves for employee MMT6765 in January 2024'")
         print("• 'How many leaves did EMP001 take last month?'")
         print("• 'Get leave report for MMT6765 from 2024-01-01 to 2024-03-31'")
-        print("\n👥 Employee Information:")
+        print("\n👥 Specific Employee Information:")
         print("• 'Who is the manager for MMT6765?'")
         print("• 'What is the email address of employee EMP001?'")
         print("• 'Show me profile details for MMT6765'")
         print("• 'What is MMT6765's designation and team?'")
+        print("\n🏢 All Employees Data:")
+        print("• 'Show me all employees'")
+        print("• 'How many employees do we have?'")
+        print("• 'List all staff members'")
+        print("• 'Get complete employee directory'")
+        print("• 'Who works in our organization?'")
         print("\n⏰ Attendance Reports:")
         print("• 'Show me attendance for MMT6765 in January 2024'")
         print("• 'What were the check-in times for EMP001 last week?'")
@@ -764,6 +908,16 @@ def main():
             print(f"⚠️ Warning: Employee API test failed: {test_data['error']}")
         else:
             print("✅ Employee API test successful!")
+        
+        # Test all employees API
+        print("🔍 Testing All Employees API (this may take longer)...")
+        all_emp_test_result = get_all_employees()
+        all_emp_test_data = json.loads(all_emp_test_result)
+        if "error" in all_emp_test_data:
+            print(f"⚠️ Warning: All Employees API test failed: {all_emp_test_data['error']}")
+        else:
+            employee_count = all_emp_test_data.get("employee_count", "unknown")
+            print(f"✅ All Employees API test successful! Found {employee_count} employees.")
         
         # Test attendance API (using a recent date range)
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -785,7 +939,7 @@ def main():
                     break
                 
                 if not user_input:
-                    print("🤖 Agent: Please ask me something about employee leave reports, employee information, or attendance data.")
+                    print("🤖 Agent: Please ask me something about employee leave reports, employee information, all employees data, or attendance data.")
                     continue
                 
                 # Send message to model

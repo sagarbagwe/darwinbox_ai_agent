@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
-import google.generativeai as genai
+import vertexai
+from vertexai.generative_models import GenerativeModel, Tool, FunctionDeclaration, Part
 from requests.auth import HTTPBasicAuth
 import json
 import os
@@ -25,6 +26,10 @@ st.set_page_config(
 DOMAIN = "https://gommt.stage.darwinbox.io"
 USERNAME = "Salesforce"
 PASSWORD = "J&$a764%#$76"
+
+# Vertex AI Configuration
+PROJECT_ID = "sadproject2025"
+LOCATION = "us-central1"
 
 # API Keys
 LEAVE_API_KEY = "049f914e0cfe2518989efc0ebfc2d8b39572cedb0825dc274755d3fc93cc360425213dea9d1c3f76eaffe52b9a9fd5448c851d0c2c9d3765eb51d9847db4a627"
@@ -164,6 +169,8 @@ def search_employee_by_name(name: str) -> dict:
         
     except Exception as e:
         logger.error(f"Name search error: {str(e)}")
+        return {"error": f"Name search failed: {str(e)}"}
+
 def get_employee_details_by_name(name: str) -> dict:
     """Get detailed employee information by searching with name"""
     try:
@@ -423,123 +430,131 @@ def get_attendance_report(employee_ids: list, from_date: str, to_date: str) -> d
     except Exception as e:
         return {"error": f"An unexpected error occurred: {str(e)}"}
 
-# ==== GEMINI SETUP ====
+# ==== VERTEX AI SETUP ====
 @st.cache_resource
-def setup_gemini_model():
-    """Setup Gemini model with caching"""
+def setup_vertexai_model():
+    """Setup Vertex AI model with caching"""
     try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            return None, "GEMINI_API_KEY environment variable not set"
+        # Initialize Vertex AI
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
         
-        genai.configure(api_key=api_key)
-        
-        # Updated tool definitions to include get_employee_details_by_name
-        tools = [
-            {
-                "function_declarations": [
-                    {
-                        "name": "get_employee_details_by_name",
-                        "description": "Get complete detailed employee information by searching with their name. This is the primary function to use when users ask for employee details by name. It combines name search with detailed profile data.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "name": {
-                                    "type": "STRING",
-                                    "description": "The employee name to search for (can be first name, last name, or full name)"
-                                }
-                            },
-                            "required": ["name"]
-                        }
-                    },
-                    {
-                        "name": "search_employee_by_name",
-                        "description": "Search for employees by their name to find employee IDs. Use this when you need to find multiple employees or just get basic search results.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "name": {
-                                    "type": "STRING",
-                                    "description": "The employee name to search for (can be first name, last name, or full name)"
-                                }
-                            },
-                            "required": ["name"]
-                        }
-                    },
-                    {
-                        "name": "get_leave_report",
-                        "description": "Retrieves approved/actioned leave records for a specific employee within a date range.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "employee_id": {
-                                    "type": "STRING",
-                                    "description": "The unique employee identifier or number"
-                                },
-                                "start_date": {
-                                    "type": "STRING",
-                                    "description": "Start date in YYYY-MM-DD format"
-                                },
-                                "end_date": {
-                                    "type": "STRING",
-                                    "description": "End date in YYYY-MM-DD format"
-                                }
-                            },
-                            "required": ["employee_id", "start_date", "end_date"]
-                        }
-                    },
-                    {
-                        "name": "get_employee_info",
-                        "description": "Gets core master profile data for one or more specific employees using their employee IDs.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "employee_ids": {
-                                    "type": "ARRAY",
-                                    "description": "A list of employee numbers",
-                                    "items": {"type": "STRING"}
-                                }
-                            },
-                            "required": ["employee_ids"]
-                        }
-                    },
-                    {
-                        "name": "get_all_employees",
-                        "description": "Retrieves master data for ALL employees in the organization. Use this when users want to see all employees, get employee lists, count total employees, or search across the entire employee database.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {}
-                        }
-                    },
-                    {
-                        "name": "get_attendance_report",
-                        "description": "Retrieves daily attendance roster data for employees within a date range.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "employee_ids": {
-                                    "type": "ARRAY",
-                                    "description": "A list of employee numbers",
-                                    "items": {"type": "STRING"}
-                                },
-                                "from_date": {
-                                    "type": "STRING",
-                                    "description": "Start date in YYYY-MM-DD format"
-                                },
-                                "to_date": {
-                                    "type": "STRING",
-                                    "description": "End date in YYYY-MM-DD format"
-                                }
-                            },
-                            "required": ["employee_ids", "from_date", "to_date"]
-                        }
+        # Define function declarations for Vertex AI
+        get_employee_details_by_name_func = FunctionDeclaration(
+            name="get_employee_details_by_name",
+            description="Get complete detailed employee information by searching with their name. This is the primary function to use when users ask for employee details by name. It combines name search with detailed profile data.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The employee name to search for (can be first name, last name, or full name)"
                     }
-                ]
+                },
+                "required": ["name"]
             }
-        ]
+        )
         
-        # Updated system prompt
-        system_prompt = f"""
+        search_employee_by_name_func = FunctionDeclaration(
+            name="search_employee_by_name",
+            description="Search for employees by their name to find employee IDs. Use this when you need to find multiple employees or just get basic search results.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The employee name to search for (can be first name, last name, or full name)"
+                    }
+                },
+                "required": ["name"]
+            }
+        )
+        
+        get_leave_report_func = FunctionDeclaration(
+            name="get_leave_report",
+            description="Retrieves approved/actioned leave records for a specific employee within a date range.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "employee_id": {
+                        "type": "string",
+                        "description": "The unique employee identifier or number"
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date in YYYY-MM-DD format"
+                    }
+                },
+                "required": ["employee_id", "start_date", "end_date"]
+            }
+        )
+        
+        get_employee_info_func = FunctionDeclaration(
+            name="get_employee_info",
+            description="Gets core master profile data for one or more specific employees using their employee IDs.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "employee_ids": {
+                        "type": "array",
+                        "description": "A list of employee numbers",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["employee_ids"]
+            }
+        )
+        
+        get_all_employees_func = FunctionDeclaration(
+            name="get_all_employees",
+            description="Retrieves master data for ALL employees in the organization. Use this when users want to see all employees, get employee lists, count total employees, or search across the entire employee database.",
+            parameters={
+                "type": "object",
+                "properties": {}
+            }
+        )
+        
+        get_attendance_report_func = FunctionDeclaration(
+            name="get_attendance_report",
+            description="Retrieves daily attendance roster data for employees within a date range.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "employee_ids": {
+                        "type": "array",
+                        "description": "A list of employee numbers",
+                        "items": {"type": "string"}
+                    },
+                    "from_date": {
+                        "type": "string",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "to_date": {
+                        "type": "string",
+                        "description": "End date in YYYY-MM-DD format"
+                    }
+                },
+                "required": ["employee_ids", "from_date", "to_date"]
+            }
+        )
+        
+        # Create tool with function declarations
+        hr_tool = Tool(
+            function_declarations=[
+                get_employee_details_by_name_func,
+                search_employee_by_name_func,
+                get_leave_report_func,
+                get_employee_info_func,
+                get_all_employees_func,
+                get_attendance_report_func
+            ]
+        )
+        
+        # System prompt
+        system_instruction = f"""
         You are an AI HR assistant for Darwinbox HRMS system. Today's date is {datetime.now().strftime('%Y-%m-%d')}.
         
         You have six main tools available:
@@ -567,35 +582,30 @@ def setup_gemini_model():
         Always be helpful and provide clear, formatted responses. When presenting data, organize it in a user-friendly way.
         """
         
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=system_prompt,
-            tools=tools,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.1,
-                top_p=0.8,
-                top_k=40,
-                max_output_tokens=2048,
-            )
+        # Create the model
+        model = GenerativeModel(
+            model_name="gemini-2.5-pro",
+            system_instruction=system_instruction,
+            tools=[hr_tool],
+            generation_config={
+                "temperature": 0.1,
+                "top_p": 0.8,
+                "top_k": 40,
+                "max_output_tokens": 2048,
+            }
         )
         
         return model, None
         
     except Exception as e:
+        logger.error(f"Vertex AI model setup error: {str(e)}")
         return None, str(e)
 
-def handle_function_call(chat, fn_call):
-    """Handle function calls from Gemini"""
+def handle_function_call(chat, function_call):
+    """Handle function calls from Vertex AI"""
     try:
-        fn_name = fn_call.name
-        
-        # Convert Gemini args to Python args
-        args = {}
-        for key, value in fn_call.args.items():
-            if hasattr(value, '__iter__') and not isinstance(value, str):
-                args[key] = list(value)
-            else:
-                args[key] = value
+        function_name = function_call.name
+        args = function_call.args
         
         # Map function names to actual functions
         function_map = {
@@ -607,26 +617,35 @@ def handle_function_call(chat, fn_call):
             "get_attendance_report": get_attendance_report
         }
         
-        if fn_name in function_map:
-            # Handle functions with no arguments (like get_all_employees)
-            if not args:
-                function_response_data = function_map[fn_name]()
+        if function_name in function_map:
+            # Convert args to dictionary if needed
+            if hasattr(args, '__iter__'):
+                kwargs = dict(args)
             else:
-                function_response_data = function_map[fn_name](**args)
+                kwargs = args
             
-            function_response = genai.protos.Part(
-                function_response=genai.protos.FunctionResponse(
-                    name=fn_name,
-                    response={"content": json.dumps(function_response_data)}
-                )
+            # Handle functions with no arguments (like get_all_employees)
+            if not kwargs:
+                function_response_data = function_map[function_name]()
+            else:
+                function_response_data = function_map[function_name](**kwargs)
+            
+            # Create function response part
+            function_response = Part.from_function_response(
+                name=function_name,
+                response={
+                    "content": function_response_data
+                }
             )
             
-            response = chat.send_message([function_response])
+            # Send function response to continue the conversation
+            response = chat.send_message(function_response)
             return response.text
         else:
-            return f"Error: Unknown function '{fn_name}' requested."
+            return f"Error: Unknown function '{function_name}' requested."
             
     except Exception as e:
+        logger.error(f"Function call error: {str(e)}")
         return f"Error executing function: {str(e)}"
 
 # ==== STREAMLIT APP ====
@@ -640,6 +659,9 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("🔧 Configuration")
+        
+        # Show Vertex AI configuration
+        st.info(f"**Vertex AI Configuration**\n\nProject ID: `{PROJECT_ID}`\n\nLocation: `{LOCATION}`")
         
         # API Status Check
         if st.button("🔍 Test API Connections"):
@@ -700,14 +722,14 @@ def main():
         if "messages" not in st.session_state:
             st.session_state.messages = []
         
-        # Initialize Gemini model
+        # Initialize Vertex AI model
         if "model" not in st.session_state:
-            model, error = setup_gemini_model()
+            model, error = setup_vertexai_model()
             if model:
                 st.session_state.model = model
-                st.session_state.chat = model.start_chat(enable_automatic_function_calling=False)
+                st.session_state.chat = model.start_chat()
             else:
-                st.error(f"Failed to initialize Gemini model: {error}")
+                st.error(f"Failed to initialize Vertex AI model: {error}")
                 st.stop()
         
         # Display chat messages
@@ -737,25 +759,43 @@ def main():
                         
                         # Check if model wants to call a function
                         if (response.candidates and 
-                            response.candidates[0].content.parts and 
-                            hasattr(response.candidates[0].content.parts[0], 'function_call') and
-                            response.candidates[0].content.parts[0].function_call):
+                            response.candidates[0].content.parts):
                             
-                            fn_call = response.candidates[0].content.parts[0].function_call
-                            result = handle_function_call(st.session_state.chat, fn_call)
-                            st.markdown(result)
-                            st.session_state.messages.append({"role": "assistant", "content": result})
-                        
-                        else:
-                            # Regular conversation
-                            if response.candidates and response.candidates[0].content.parts:
-                                response_text = response.candidates[0].content.parts[0].text
+                            # Handle function calls
+                            function_calls = []
+                            text_parts = []
+                            
+                            for part in response.candidates[0].content.parts:
+                                if hasattr(part, 'function_call') and part.function_call:
+                                    function_calls.append(part.function_call)
+                                elif hasattr(part, 'text') and part.text:
+                                    text_parts.append(part.text)
+                            
+                            # Process function calls
+                            if function_calls:
+                                final_response = ""
+                                for fn_call in function_calls:
+                                    result = handle_function_call(st.session_state.chat, fn_call)
+                                    final_response += result + "\n"
+                                
+                                st.markdown(final_response.strip())
+                                st.session_state.messages.append({"role": "assistant", "content": final_response.strip()})
+                            
+                            # Process text responses
+                            elif text_parts:
+                                response_text = "\n".join(text_parts)
                                 st.markdown(response_text)
                                 st.session_state.messages.append({"role": "assistant", "content": response_text})
+                            
                             else:
                                 error_msg = "I'm sorry, I didn't understand that. Could you please rephrase?"
                                 st.markdown(error_msg)
                                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                        
+                        else:
+                            error_msg = "I'm sorry, I didn't get a proper response. Could you please try again?"
+                            st.markdown(error_msg)
+                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
                     
                     except Exception as e:
                         error_msg = f"An error occurred: {str(e)}"
@@ -919,7 +959,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666;'>
-            🤖 Darwinbox HR Agent | Powered by Gemini AI | Now with Name Search Support
+            🤖 Darwinbox HR Agent | Powered by Vertex AI | Now with Name Search Support
         </div>
         """, 
         unsafe_allow_html=True
