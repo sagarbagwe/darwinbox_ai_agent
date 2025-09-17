@@ -184,9 +184,13 @@ def get_attendance_report(employee_ids, from_date: str, to_date: str) -> str:
 # ==== 4. GEMINI MODEL CONFIGURATION ====
 # ==============================================================================
 
+# ==============================================================================
+# ==== 4. GEMINI MODEL CONFIGURATION ====
+# ==============================================================================
+
 @st.cache_resource
 def setup_gemini_model():
-    # This function remains unchanged
+    # This function is updated to improve name-based searches.
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
@@ -207,11 +211,11 @@ def setup_gemini_model():
                     "parameters": {"type": "OBJECT", "properties": {"employee_id": {"type": "STRING"}, "start_date": {"type": "STRING"}, "end_date": {"type": "STRING"}}, "required": ["employee_id", "start_date", "end_date"]}
                 },
                 {
-                    "name": "get_employee_info", "description": "Gets profile data for one or more specific employees.",
+                    "name": "get_employee_info", "description": "Gets profile data for one or more specific employees using their exact employee IDs.",
                     "parameters": {"type": "OBJECT", "properties": {"employee_ids": {"type": "ARRAY", "items": {"type": "STRING"}}}, "required": ["employee_ids"]}
                 },
                 {
-                    "name": "get_all_employees", "description": "Retrieves master data for ALL employees.",
+                    "name": "get_all_employees", "description": "Retrieves master data for ALL employees. Use this function when you need to find an employee by name or other attributes.",
                     "parameters": {"type": "OBJECT", "properties": {}}
                 },
                 {
@@ -223,20 +227,24 @@ def setup_gemini_model():
     ]
     
     today_str = datetime.now().strftime('%Y-%m-%d')
+    # --- START: MODIFIED SYSTEM PROMPT ---
     system_prompt = f"""You are an AI HR assistant for the Darwinbox HRMS. Today's date is {today_str}.
     Your primary function is to use the available tools to answer user questions about employee leaves, profiles, and attendance.
     **CRITICAL INSTRUCTIONS:**
     1.  **Analyze the User's Goal:** Understand what the user wants to achieve.
-    2.  **Select the Right Tool:** Based on the user's goal, select the appropriate tool (`get_leave_report`, `get_employee_info`, `get_all_employees`, `get_attendance_report`).
-    3.  **Multi-Step Queries:** If a user asks a question that requires filtering or sorting (e.g., "show me the last 10 employees who joined"), you **MUST** follow a two-step process: First, call the broad tool (e.g., `get_all_employees`). Second, after you receive the full data, analyze it to answer the specific filtered question.
-    4.  **Parameter Extraction:** You must extract all required parameters (like `employee_id` and dates) from the user's query. If anything is missing, ask for clarification.
+    2.  **ID vs. Name Distinction:** The tools `get_leave_report`, `get_employee_info`, and `get_attendance_report` require a precise `employee_id`. They DO NOT work with employee names.
+    3.  **Multi-Step Process for Names:** If a user asks a question using an employee's name (e.g., "what is the role of Sonli Garg?") or any other non-ID attribute, you **MUST** follow this two-step process:
+        a. First, call the `get_all_employees` tool to retrieve the complete employee list.
+        b. Second, once you have the data, search within that data for the requested name to find their details and answer the original question.
+    4.  **Parameter Extraction:** You must extract all required parameters (like `employee_id` and dates) from the user's query. If an ID is missing, follow the multi-step process above. If other details are missing, ask for clarification.
     5.  **Date Format:** All dates provided to tools MUST be in `YYYY-MM-DD` format.
-    6.  **Summarize Results:** Do not just dump raw JSON. Present the information from the tools in a clear, user-friendly format (summary sentence or a markdown table).
+    6.  **Summarize Results:** Do not just dump raw JSON. Present the information from the tools in a clear, user-friendly format (e.g., a summary sentence or a markdown table).
     """
+    # --- END: MODIFIED SYSTEM PROMPT ---
 
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-pro",
             system_instruction=system_prompt,
             tools=tools,
             generation_config=genai.types.GenerationConfig(temperature=0.1)
