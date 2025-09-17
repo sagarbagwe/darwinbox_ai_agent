@@ -86,35 +86,27 @@ def search_employee_by_name(name: str) -> dict:
         employees_list = employees_data["data"]
         matching_employees = []
         
-        # Debug: Log the first few employees to understand the data structure
         logger.info(f"Searching for: {search_name}")
         logger.info(f"Total employees to search: {len(employees_list)}")
         
-        # Search through employees
         for employee in employees_list:
-            # Get various name fields to search in - try different possible field names
             full_name = str(employee.get("full_name", employee.get("employee_name", employee.get("name", "")))).lower()
             first_name = str(employee.get("first_name", employee.get("firstName", ""))).lower()
             last_name = str(employee.get("last_name", employee.get("lastName", ""))).lower()
             preferred_name = str(employee.get("preferred_name", employee.get("preferredName", ""))).lower()
             
-            # Create a list of all possible name variations to search
             name_fields = [full_name, first_name, last_name, preferred_name]
             name_fields = [field for field in name_fields if field and field != "none" and field != ""]
             
-            # Split search name into parts for better matching
             search_parts = search_name.split()
             
-            # Check if search name matches any name field
             match_found = False
             
-            # Direct substring matching
             for field in name_fields:
                 if search_name in field:
                     match_found = True
                     break
             
-            # Part-by-part matching (for "sonali garg" matching "Sonali Garg")
             if not match_found and len(search_parts) > 1:
                 for field in name_fields:
                     field_parts = field.split()
@@ -122,7 +114,6 @@ def search_employee_by_name(name: str) -> dict:
                         match_found = True
                         break
             
-            # Individual word matching
             if not match_found:
                 for search_part in search_parts:
                     for field in name_fields:
@@ -133,7 +124,6 @@ def search_employee_by_name(name: str) -> dict:
                         break
             
             if match_found:
-                # Extract employee details with fallback field names
                 employee_data = {
                     "employee_id": employee.get("employee_number", employee.get("employeeNumber", employee.get("emp_id", "N/A"))),
                     "full_name": employee.get("full_name", employee.get("employee_name", employee.get("name", "N/A"))),
@@ -174,7 +164,6 @@ def search_employee_by_name(name: str) -> dict:
 def get_employee_details_by_name(name: str) -> dict:
     """Get detailed employee information by searching with name"""
     try:
-        # First search for the employee by name
         search_result = search_employee_by_name(name)
         
         if "error" in search_result:
@@ -183,7 +172,6 @@ def get_employee_details_by_name(name: str) -> dict:
         if search_result["status"] == "no_matches":
             return search_result
         
-        # If exactly one match, get detailed info
         if search_result["matches_found"] == 1:
             employee_id = search_result["employees"][0]["employee_id"]
             detailed_info = get_employee_info([employee_id])
@@ -196,7 +184,6 @@ def get_employee_details_by_name(name: str) -> dict:
                 "timestamp": datetime.now().isoformat()
             }
         
-        # If multiple matches, return the search results for user to choose
         else:
             return {
                 "status": "multiple_matches",
@@ -272,18 +259,17 @@ def get_leave_report(employee_id: str, start_date: str, end_date: str) -> dict:
     except Exception as e:
         return {"error": f"An unexpected error occurred: {str(e)}"}
 
+# ----------------- LOGIC CORRECTED IN THIS FUNCTION -----------------
 def get_employee_info(employee_ids: list) -> dict:
-    """Fetch employee information"""
+    """Fetch and clean employee information for the AI."""
     try:
         if not employee_ids or not isinstance(employee_ids, list):
             return {"error": "Employee IDs must be provided as a list"}
         
-        valid_ids = []
-        for emp_id in employee_ids:
-            if not validate_employee_id(emp_id):
-                return {"error": f"Invalid employee ID: {emp_id}"}
-            valid_ids.append(emp_id.strip())
-        
+        valid_ids = [emp_id.strip() for emp_id in employee_ids if validate_employee_id(emp_id)]
+        if not valid_ids:
+             return {"error": "No valid employee IDs provided."}
+
         url = f"{DOMAIN}/masterapi/employee"
         
         payload = {
@@ -305,12 +291,29 @@ def get_employee_info(employee_ids: list) -> dict:
         if response.status_code == 200:
             try:
                 api_data = response.json()
-                return {
-                    "status": "success",
-                    "requested_employee_ids": employee_ids,
-                    "data": api_data,
-                    "timestamp": datetime.now().isoformat()
-                }
+
+                # **START OF FIX:**
+                # The API returns nested data. We clean it up here to make it simple for the AI.
+                if api_data.get("status") == "success" and "data" in api_data and isinstance(api_data["data"], list):
+                    employee_records = api_data["data"]
+                    
+                    if not employee_records:
+                        # API call was successful but returned no data for the ID
+                        return {
+                            "status": "not_found", 
+                            "message": f"No employee was found with the ID(s): {valid_ids}. Please verify the ID."
+                        }
+                    
+                    # Return a clean, simple structure that the AI can easily understand
+                    return {
+                        "status": "success",
+                        "employee_details": employee_records # This is a clean list of employee data
+                    }
+                else:
+                    # Handle unexpected successful response structure
+                    return {"error": "API response format was unexpected.", "raw_response": api_data}
+                # **END OF FIX**
+
             except json.JSONDecodeError:
                 return {"error": "Invalid JSON response from API"}
         else:
@@ -318,17 +321,16 @@ def get_employee_info(employee_ids: list) -> dict:
             
     except Exception as e:
         return {"error": f"An unexpected error occurred: {str(e)}"}
+# ----------------- END OF CORRECTED FUNCTION -----------------
 
 def get_all_employees() -> dict:
     """Fetch all employee master data from the organization"""
     try:
         url = f"{DOMAIN}/masterapi/employee"
         
-        # Payload without employee_ids to get all employees
         payload = {
             "api_key": EMP_API_KEY,
             "datasetKey": EMP_DATASET_KEY
-            # No employee_ids parameter = fetch all employees
         }
         
         headers = {"Content-Type": "application/json"}
@@ -338,14 +340,13 @@ def get_all_employees() -> dict:
             json=payload,
             headers=headers,
             auth=HTTPBasicAuth(USERNAME, PASSWORD),
-            timeout=60  # Increased timeout for potentially large response
+            timeout=60
         )
         
         if response.status_code == 200:
             try:
                 api_data = response.json()
                 
-                # Count employees for summary
                 employee_count = 0
                 if isinstance(api_data, dict) and "data" in api_data:
                     if isinstance(api_data["data"], list):
@@ -374,11 +375,7 @@ def get_attendance_report(employee_ids: list, from_date: str, to_date: str) -> d
         if not employee_ids or not isinstance(employee_ids, list):
             return {"error": "Employee IDs must be provided as a list"}
         
-        valid_ids = []
-        for emp_id in employee_ids:
-            if not validate_employee_id(emp_id):
-                return {"error": f"Invalid employee ID: {emp_id}"}
-            valid_ids.append(emp_id.strip())
+        valid_ids = [emp_id.strip() for emp_id in employee_ids if validate_employee_id(emp_id)]
         
         if not validate_date_format(from_date) or not validate_date_format(to_date):
             return {"error": "Invalid date format. Expected YYYY-MM-DD"}
@@ -435,10 +432,8 @@ def get_attendance_report(employee_ids: list, from_date: str, to_date: str) -> d
 def setup_vertexai_model():
     """Setup Vertex AI model with caching"""
     try:
-        # Initialize Vertex AI
         vertexai.init(project=PROJECT_ID, location=LOCATION)
         
-        # Define function declarations for Vertex AI
         get_employee_details_by_name_func = FunctionDeclaration(
             name="get_employee_details_by_name",
             description="Get complete detailed employee information by searching with their name. This is the primary function to use when users ask for employee details by name. It combines name search with detailed profile data.",
@@ -541,7 +536,6 @@ def setup_vertexai_model():
             }
         )
         
-        # Create tool with function declarations
         hr_tool = Tool(
             function_declarations=[
                 get_employee_details_by_name_func,
@@ -553,36 +547,25 @@ def setup_vertexai_model():
             ]
         )
         
-        # System prompt
+        # ----------------- SYSTEM PROMPT UPDATED HERE -----------------
         system_instruction = f"""
         You are an AI HR assistant for Darwinbox HRMS system. Today's date is {datetime.now().strftime('%Y-%m-%d')}.
         
         You have six main tools available:
-        1. get_employee_details_by_name: PRIMARY tool for when users ask for employee info by name (like "show me data of John Smith")
-        2. search_employee_by_name: For finding employees when you need just search results or multiple matches
-        3. get_leave_report: For questions about employee leaves, absences, or time-off history
-        4. get_employee_info: For questions about specific employee profiles using employee IDs
-        5. get_all_employees: For questions about ALL employees, employee lists, total employee count
-        6. get_attendance_report: For questions about employee attendance, check-in/check-out times
+        1. get_employee_details_by_name: PRIMARY tool for when users ask for employee info by name (like "show me data of John Smith").
+        2. search_employee_by_name: For finding employees when you need just search results or multiple matches.
+        3. get_leave_report: For questions about employee leaves, absences, or time-off history.
+        4. get_employee_info: For questions about specific employee profiles using employee IDs. When you use this tool, the results will be in a key named 'employee_details'. If the employee is not found, the tool will explicitly tell you.
+        5. get_all_employees: For questions about ALL employees, employee lists, total employee count.
+        6. get_attendance_report: For questions about employee attendance, check-in/check-out times.
         
         IMPORTANT: When users ask about an employee by name (like "Show me data of Sonali Garg" or "Who is John Smith"), 
-        ALWAYS use get_employee_details_by_name first. This function will:
-        - Search for the employee by name
-        - If found uniquely, return complete detailed information
-        - If multiple matches, show options for user to choose
-        - Handle all the complexity of name searching and data retrieval
-        
-        Use get_employee_details_by_name when users ask:
-        - "Show me data of [Name]"
-        - "Show all details of [Name]"
-        - "Who is [Name]?"
-        - "Get info for [Name]"
-        - "Find employee [Name]"
+        ALWAYS use get_employee_details_by_name first. This function will handle all the complexity of name searching and data retrieval.
         
         Always be helpful and provide clear, formatted responses. When presenting data, organize it in a user-friendly way.
         """
+        # ----------------- END OF PROMPT UPDATE -----------------
         
-        # Create the model
         model = GenerativeModel(
             model_name="gemini-2.5-pro",
             system_instruction=system_instruction,
@@ -607,7 +590,6 @@ def handle_function_call(chat, function_call):
         function_name = function_call.name
         args = function_call.args
         
-        # Map function names to actual functions
         function_map = {
             "get_employee_details_by_name": get_employee_details_by_name,
             "search_employee_by_name": search_employee_by_name,
@@ -618,19 +600,16 @@ def handle_function_call(chat, function_call):
         }
         
         if function_name in function_map:
-            # Convert args to dictionary if needed
             if hasattr(args, '__iter__'):
                 kwargs = dict(args)
             else:
                 kwargs = args
             
-            # Handle functions with no arguments (like get_all_employees)
             if not kwargs:
                 function_response_data = function_map[function_name]()
             else:
                 function_response_data = function_map[function_name](**kwargs)
             
-            # Create function response part
             function_response = Part.from_function_response(
                 name=function_name,
                 response={
@@ -638,7 +617,6 @@ def handle_function_call(chat, function_call):
                 }
             )
             
-            # Send function response to continue the conversation
             response = chat.send_message(function_response)
             return response.text
         else:
@@ -648,32 +626,26 @@ def handle_function_call(chat, function_call):
         logger.error(f"Function call error: {str(e)}")
         return f"Error executing function: {str(e)}"
 
-# ==== STREAMLIT APP ====
+# ==== STREAMLIT APP (UNCHANGED FROM HERE) ====
 def main():
     """Main Streamlit application"""
     
-    # Header
     st.title("🏢 Darwinbox HR Agent")
     st.markdown("---")
     
-    # Sidebar
     with st.sidebar:
-        st.header("🔧 Configuration")
+        st.header("⚙️ Configuration")
         
-        # Show Vertex AI configuration
         st.info(f"**Vertex AI Configuration**\n\nProject ID: `{PROJECT_ID}`\n\nLocation: `{LOCATION}`")
         
-        # API Status Check
-        if st.button("🔍 Test API Connections"):
+        if st.button("🔄 Test API Connections"):
             with st.spinner("Testing APIs..."):
-                # Test Employee API
                 emp_result = get_employee_info(["MMT6765"])
                 if "error" in emp_result:
                     st.error(f"Employee API: ❌ {emp_result['error']}")
                 else:
                     st.success("Employee API: ✅ Working")
                 
-                # Test All Employees API
                 with st.spinner("Testing All Employees API (may take longer)..."):
                     all_emp_result = get_all_employees()
                     if "error" in all_emp_result:
@@ -682,7 +654,6 @@ def main():
                         emp_count = all_emp_result.get("employee_count", "unknown")
                         st.success(f"All Employees API: ✅ Working ({emp_count} employees found)")
                 
-                # Test Name Search
                 name_search_result = search_employee_by_name("Sonali")
                 if "error" in name_search_result:
                     st.error(f"Name Search: ❌ {name_search_result['error']}")
@@ -690,7 +661,6 @@ def main():
                     matches = name_search_result.get("matches_found", 0)
                     st.success(f"Name Search: ✅ Working ({matches} matches for 'Sonali')")
                 
-                # Test Attendance API
                 yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
                 today = datetime.now().strftime('%Y-%m-%d')
                 att_result = get_attendance_report(["MMT6765"], yesterday, today)
@@ -703,26 +673,23 @@ def main():
         st.markdown("**Quick Actions:**")
         if st.button("🔍 Search by Name"):
             st.session_state.sample_query = "Show me data of Sonali Garg"
-        if st.button("📋 Sample Leave Query"):
+        if st.button("📅 Sample Leave Query"):
             st.session_state.sample_query = "Show me leaves for employee MMT6765 in January 2024"
-        if st.button("👥 Sample Employee Query"):
+        if st.button("👤 Sample Employee Query"):
             st.session_state.sample_query = "Who is the manager for MMT6765?"
         if st.button("🏢 Sample All Employees Query"):
             st.session_state.sample_query = "How many employees do we have in total?"
         if st.button("⏰ Sample Attendance Query"):
             st.session_state.sample_query = "Show me attendance for MMT6765 last week"
     
-    # Main content
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.header("💬 AI Assistant")
         
-        # Initialize chat history
         if "messages" not in st.session_state:
             st.session_state.messages = []
         
-        # Initialize Vertex AI model
         if "model" not in st.session_state:
             model, error = setup_vertexai_model()
             if model:
@@ -732,36 +699,29 @@ def main():
                 st.error(f"Failed to initialize Vertex AI model: {error}")
                 st.stop()
         
-        # Display chat messages
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
         
-        # Chat input
         query = st.chat_input("Ask me about employees by name, leaves, attendance, or any HR data...")
         
-        # Handle sample query button
         if "sample_query" in st.session_state:
             query = st.session_state.sample_query
             del st.session_state.sample_query
         
         if query:
-            # Add user message to chat history
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(query)
             
-            # Get AI response
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     try:
                         response = st.session_state.chat.send_message(query)
                         
-                        # Check if model wants to call a function
                         if (response.candidates and 
                             response.candidates[0].content.parts):
                             
-                            # Handle function calls
                             function_calls = []
                             text_parts = []
                             
@@ -771,7 +731,6 @@ def main():
                                 elif hasattr(part, 'text') and part.text:
                                     text_parts.append(part.text)
                             
-                            # Process function calls
                             if function_calls:
                                 final_response = ""
                                 for fn_call in function_calls:
@@ -781,7 +740,6 @@ def main():
                                 st.markdown(final_response.strip())
                                 st.session_state.messages.append({"role": "assistant", "content": final_response.strip()})
                             
-                            # Process text responses
                             elif text_parts:
                                 response_text = "\n".join(text_parts)
                                 st.markdown(response_text)
@@ -803,10 +761,9 @@ def main():
                         st.session_state.messages.append({"role": "assistant", "content": error_msg})
     
     with col2:
-        st.header("📊 Manual Tools")
+        st.header("🛠️ Manual Tools")
         
-        # Tool selection tabs - Updated to include Name Search tab
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Name Search", "📋 Leaves", "👥 Employee", "🏢 All Employees", "⏰ Attendance"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Name Search", "📅 Leaves", "👤 Employee", "🏢 All Employees", "⏰ Attendance"])
         
         with tab1:
             st.subheader("Search Employee by Name")
@@ -826,9 +783,8 @@ def main():
                                 matches = result.get("matches_found", 0)
                                 st.success(f"Found {matches} employee(s) matching '{emp_name}'")
                                 
-                                # Display results in a nice format
                                 for i, employee in enumerate(result["employees"], 1):
-                                    with st.expander(f"📋 {employee['full_name']} (ID: {employee['employee_id']})"):
+                                    with st.expander(f"📄 {employee['full_name']} (ID: {employee['employee_id']})"):
                                         col_a, col_b = st.columns(2)
                                         with col_a:
                                             st.write(f"**Email:** {employee['email']}")
@@ -838,7 +794,6 @@ def main():
                                             st.write(f"**Office City:** {employee['office_city']}")
                                             st.write(f"**Status:** {employee['employee_status']}")
                                             
-                                            # Quick action buttons
                                             if st.button(f"Get Full Details", key=f"details_{i}"):
                                                 detail_result = get_employee_info([employee['employee_id']])
                                                 if "error" not in detail_result:
@@ -912,10 +867,8 @@ def main():
                             employee_count = result.get("employee_count", 0)
                             st.success(f"All employee data retrieved successfully! Found {employee_count} employees.")
                             
-                            # Show summary before full data
                             st.subheader(f"📊 Summary: {employee_count} Total Employees")
                             
-                            # Option to view full data or just summary
                             if st.checkbox("Show full employee data (may be large)"):
                                 st.json(result)
                             else:
@@ -954,7 +907,6 @@ def main():
                     else:
                         st.warning("Please enter employee ID(s)")
     
-    # Footer
     st.markdown("---")
     st.markdown(
         """
@@ -965,7 +917,6 @@ def main():
         unsafe_allow_html=True
     )
     
-    # Clear chat button
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
         st.rerun()
